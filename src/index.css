@@ -1,0 +1,40 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;600;700&family=Noto+Sans+KR:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { -webkit-tap-highlight-color: transparent; }
+  body { @apply bg-sand text-ink font-body antialiased; }
+  * { @apply box-border; }
+}
+
+@layer components {
+  .card-flip { perspective: 1000px; }
+  .card-inner {
+    position: relative;
+    transform-style: preserve-3d;
+    transition: transform 0.5s cubic-bezier(0.4,0,0.2,1);
+  }
+  .card-inner.flipped { transform: rotateY(180deg); }
+  .card-face {
+    position: absolute; inset: 0;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+  .card-back { transform: rotateY(180deg); }
+
+  .btn-primary {
+    @apply bg-ink text-sand-50 font-body font-semibold px-6 py-3 rounded-xl
+           hover:bg-ink-light active:scale-[0.98] transition-all duration-150
+           disabled:bg-stone disabled:text-ink-muted disabled:cursor-not-allowed;
+  }
+  .btn-outline {
+    @apply border border-stone text-ink font-body font-medium px-5 py-2.5 rounded-xl
+           hover:border-ink/40 hover:bg-stone/30 active:scale-[0.98] transition-all duration-150;
+  }
+  .chip {
+    @apply text-xs font-mono px-2.5 py-1 rounded-full border;
+  }
+}
