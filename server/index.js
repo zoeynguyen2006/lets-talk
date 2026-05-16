@@ -44,12 +44,11 @@ function getCandidateWords(wordMix) {
   const candidates = [];
 
   for (const [difficulty, finalCount] of Object.entries(wordMix)) {
-    const matchingWords = words.filter((word) => word.difficulty === difficulty);
-    const shuffledWords = shuffleArray(matchingWords);
-
-    const candidateCount = Math.min(finalCount * 12, shuffledWords.length);
-
-    candidates.push(...shuffledWords.slice(0, candidateCount));
+    const matching = words.filter((w) => w.difficulty === difficulty);
+    const shuffled = shuffleArray(matching);
+    candidates.push(
+      ...shuffled.slice(0, Math.min(finalCount * 12, shuffled.length))
+    );
   }
 
   return candidates;
@@ -64,16 +63,25 @@ function extractJson(text) {
   return JSON.parse(cleaned);
 }
 
-app.get("/api/health", (req, res) => {
-  res.json({
-    ok: true,
-    wordCount: words.length,
+async function generateJson(prompt, model = "gemini-2.5-flash") {
+  const response = await ai.models.generateContent({
+    model,
+    contents: prompt,
   });
+
+  return extractJson(response.text);
+}
+
+// ─── Health ────────────────────────────────────────────────────────────────
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, wordCount: words.length });
 });
 
+// ─── /api/recommend ────────────────────────────────────────────────────────
+// Now accepts cueAnswers so word selection is informed by the user's full plan
 app.post("/api/recommend", async (req, res) => {
   try {
-    const { topic, roughIdea, difficultySliderValue } = req.body;
+    const { topic, roughIdea, cueAnswers, difficultySliderValue } = req.body;
 
     if (!topic || !roughIdea || !difficultySliderValue) {
       return res.status(400).json({
@@ -84,151 +92,229 @@ app.post("/api/recommend", async (req, res) => {
     const wordMix = getWordMix(Number(difficultySliderValue));
     const candidateWords = getCandidateWords(wordMix);
 
-    console.log("Recommend request:");
-    console.log("Topic:", topic);
-    console.log("Rough idea:", roughIdea);
-    console.log("Word mix:", wordMix);
-    console.log("Candidate word count:", candidateWords.length);
+    const cueContext =
+      Array.isArray(cueAnswers) && cueAnswers.some((a) => a?.trim())
+        ? `\nUser's planning answers (use these to pick more relevant words):\n${cueAnswers
+            .filter((a) => a?.trim())
+            .map((a, i) => `${i + 1}. ${a}`)
+            .join("\n")}`
+        : "";
 
-    const prompt = `
-You are a Korean speaking practice curriculum designer for an app called "말해봐".
+    const prompt = `You are a Korean speaking practice curriculum designer for "말해봐".
 
-The app helps beginner-to-intermediate Korean learners turn passive vocabulary into active speaking vocabulary.
+Select exactly 30 Korean vocabulary word IDs from the candidate list below that best help the user speak about their idea.
 
-Your job:
-Select exactly 30 Korean vocabulary word IDs from the candidate word list that would help the user speak about their own rough idea.
-
-Learner profile:
-- Beginner-to-intermediate Korean learner.
-- They may recognize many Korean words passively.
-- They struggle to actively use those words when speaking.
-- They need useful, natural, realistic words for a short spoken practice session.
-- They are not preparing for an academic essay.
-- They need words they can actually try using in a 2-minute speech.
-
-Educational goal:
-Choose words that help the user express their idea more naturally in Korean.
-
-Do NOT choose only the easiest words.
-Do NOT choose overly academic, rare, stiff, or exam-style words unless they are clearly useful for the user's rough idea.
-
-Prioritize words that are:
-- useful in real conversation
-- relevant to the user's rough idea
-- helpful for storytelling, feelings, opinions, daily life, or explaining experiences
-- appropriate for beginner-to-intermediate learners
-- likely to be recognized passively but not yet actively owned
-
-Topic:
-${JSON.stringify(topic, null, 2)}
-
-User's rough speaking idea:
-${roughIdea}
-
-Required difficulty mix:
-${JSON.stringify(wordMix, null, 2)}
+Topic: ${JSON.stringify(topic)}
+User's rough idea: ${roughIdea}${cueContext}
+Required difficulty mix: ${JSON.stringify(wordMix)}
 
 Candidate words:
-${JSON.stringify(candidateWords, null, 2)}
+${JSON.stringify(candidateWords)}
 
-Selection rules:
-1. Select exactly 30 word IDs.
-2. Select only IDs that exist in the candidate word list.
-3. Follow the required difficulty mix exactly.
-4. Avoid duplicate IDs.
-5. Do not invent new Korean words.
-6. Do not change the word meanings.
-7. Do not return full word objects. Return IDs only.
-8. Prefer words that fit the user's rough idea, not just the broad topic.
-9. Avoid words that are too generic and empty, such as "person", "time", "come", "do", "go", unless clearly needed.
-10. Avoid words that are too abstract, political, technical, or academic unless the user's rough idea clearly needs them.
-11. Prefer words that can naturally appear in a 2-minute spoken answer.
-12. Prefer a balanced set:
-   - nouns for topic content
-   - verbs for actions
-   - adjectives for feelings/descriptions
-   - adverbs/connectors if useful for natural speech
-
-Quality guide:
-Good choices help the learner say things like:
-- "At first, it felt unfamiliar."
-- "I slowly got used to it."
-- "I felt lonely, but the situation got better."
-- "Compared to before, I feel more comfortable now."
-- "I had some difficulties, but I learned a lot."
-
-Bad choices are:
-- too basic and empty
-- unrelated to the user's story
-- too academic or essay-like
-- too specific for a different situation
-- awkward to force into a short speech
-
-Return valid JSON only.
-Do not include markdown.
-Do not include explanations.
-Do not include code fences.
+Rules:
+1. Select exactly 30 IDs from the candidate list only.
+2. Follow the difficulty mix exactly.
+3. Prefer words useful for real conversation: storytelling, feelings, opinions, daily life.
+4. Avoid overly academic, abstract, or generic filler words unless clearly needed.
+5. Write one short natural Korean example sentence per word, fitting the user's rough idea.
+6. Return valid JSON only — no markdown, no code fences, no explanations.
 
 Return format:
 {
   "words": [
-    {
-      "id": "w0001",
-      "example": "A short, natural Korean sentence using this word"
-    }
+    { "id": "w0001", "example": "A short natural Korean sentence using this word" }
   ]
-}
+}`;
 
-Example sentence rules:
-1. Write exactly one Korean example sentence for each selected word.
-2. The sentence must fit the user's topic and rough speaking idea.
-3. The sentence should be beginner-to-intermediate friendly.
-4. The sentence should sound natural in spoken Korean.
-5. Do not make the sentence too long.
-6. Do not use overly academic Korean.
-7. The sentence must clearly use the target word.
-8. Do not include English translation.
-`;
+    const parsed = await generateJson(prompt);
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
-    
-    const parsed = extractJson(response.text);
-    const selectedItems = parsed.words;
-    
-    if (!Array.isArray(selectedItems)) {
-      return res.status(500).json({
-        error: "Gemini response did not include words array.",
-      });
-    }
-    
-    const selectedWords = selectedItems
+    const selectedWords = parsed.words
       .map((item) => {
         const word = words.find((w) => w.id === item.id);
         if (!word) return null;
-    
+
         return {
           ...word,
           example: item.example,
         };
       })
       .filter(Boolean);
-    
-    return res.json({
-      words: selectedWords,
-      wordMix,
-    });
 
+    return res.json({ words: selectedWords, wordMix });
   } catch (error) {
     console.error("Recommend error:", error);
-    return res.status(500).json({
-      error: "Failed to recommend words.",
-    });
+    return res.status(500).json({ error: "Failed to recommend words." });
   }
 });
 
+// ─── /api/cues ─────────────────────────────────────────────────────────────
+// NEW: topic + roughIdea → 4-5 contextual questions using 5W1H frame internally
+app.post("/api/cues", async (req, res) => {
+  try {
+    const { topic, roughIdea } = req.body;
+
+    if (!topic || !roughIdea) {
+      return res.status(400).json({
+        error: "topic and roughIdea are required.",
+      });
+    }
+
+    const prompt = `You are a Korean speaking coach helping a beginner-to-intermediate learner plan a short spoken practice session.
+
+The user has chosen a topic and written a rough speaking idea. Your job is to generate 4 to 5 short, specific questions in English that help them think more deeply about what they want to say — so that when they speak, they have more to talk about and don't run out of content.
+
+Use the 5W1H framework (Who, What, When, Where, Why, How) as your internal tool for generating questions, but do NOT label questions with "Who:", "What:", etc. The questions should feel natural and conversational, not like a form.
+
+Rules:
+- Questions must be specific to the user's rough idea, not generic.
+- Each question should unlock a different dimension: a specific detail, a feeling or reaction, a reason or cause, a comparison or contrast, or what changed / what comes next.
+- Questions should be answerable in 1-3 English sentences.
+- Do not ask about Korean language itself.
+- Do not ask about vocabulary or grammar.
+- Keep questions short — one sentence each.
+- Return 4 to 5 questions, no more.
+- Return valid JSON only — no markdown, no code fences.
+
+Topic: ${JSON.stringify(topic)}
+User's rough idea: ${roughIdea}
+
+Return format:
+{
+  "questions": [
+    "Question one here?",
+    "Question two here?",
+    "Question three here?",
+    "Question four here?",
+    "Question five here?"
+  ]
+}`;
+
+    const parsed = await generateJson(prompt);
+
+    return res.json({ questions: parsed.questions });
+  } catch (error) {
+    console.error("Cues error:", error);
+    return res.status(500).json({ error: "Failed to generate cue questions." });
+  }
+});
+
+// ─── /api/timeline ─────────────────────────────────────────────────────────
+// NEW: topic + roughIdea + selectedWords + cueAnswers + difficulty
+//      → picks grammar + builds 4-5 speech timeline sections
+app.post("/api/timeline", async (req, res) => {
+  try {
+    const {
+      topic,
+      roughIdea,
+      selectedWords,
+      cueQuestions,
+      cueAnswers,
+      difficultySliderValue,
+    } = req.body;
+
+    if (!topic || !roughIdea || !selectedWords || !cueAnswers) {
+      return res.status(400).json({
+        error: "topic, roughIdea, selectedWords, and cueAnswers are required.",
+      });
+    }
+
+    const difficultyLabel =
+      {
+        1: "beginner (TOPIK 1-2)",
+        2: "lower-intermediate (TOPIK 2-3)",
+        3: "intermediate (TOPIK 3)",
+        4: "upper-intermediate (TOPIK 3-4)",
+        5: "advanced-intermediate (TOPIK 4)",
+      }[Number(difficultySliderValue)] || "intermediate (TOPIK 3)";
+
+    const cueContext = cueQuestions
+      .map((q, i) => `Q: ${q}\nA: ${cueAnswers[i] || "(no answer)"}`)
+      .join("\n\n");
+
+    const prompt = `You are a Korean speaking coach building a personalised speech plan for a beginner-to-intermediate Korean learner.
+
+The learner is about to do a 2-minute spoken practice session. They have selected vocabulary words they want to use. They have answered planning questions in English. Your job is to:
+
+1. Pick 2 to 3 Korean grammar patterns appropriate for the learner's difficulty level (${difficultyLabel}).
+   - Choose grammar that genuinely helps connect or extend speech for THIS topic and these answers.
+   - Do not choose random grammar. Each pattern must serve a clear purpose in this specific speech.
+   - Generate the grammar patterns yourself — do not use a fixed list.
+
+2. Build 4 to 5 speech timeline sections that walk the learner through their talk.
+   - Each section has a label (e.g. "Open", "The story", "How you felt", "The reason", "Wrap up").
+   - Each section has a short speaking cue — rephrase one of their cue question answers as a 1-sentence English prompt they can follow while speaking. Make it feel like a gentle nudge, not a command.
+   - Each section gets 2 to 3 words from the selected vocabulary that fit naturally in that section. Distribute all selected words across sections — every word should appear in exactly one section.
+   - Attach one grammar pattern to the section where it fits most naturally. Not every section needs grammar — only where it genuinely helps.
+   - For sections that have grammar: write one short example sentence in Korean using that grammar pattern, relevant to the section topic.
+
+Topic: ${JSON.stringify(topic)}
+Rough idea: ${roughIdea}
+
+Cue Q&A:
+${cueContext}
+
+Selected vocabulary (use ALL of them, distribute across sections):
+${JSON.stringify(
+  selectedWords.map((w) => ({
+    id: w.id,
+    korean: w.korean,
+    english: w.english,
+  }))
+)}
+
+Difficulty level: ${difficultyLabel}
+
+Return valid JSON only — no markdown, no code fences, no explanations.
+
+Return format:
+{
+  "grammar": [
+    {
+      "id": "g1",
+      "pattern": "-(으)니까",
+      "meaning": "because / since (gives reason)",
+      "example": "피곤하니까 일찍 잤어요."
+    }
+  ],
+  "timeline": [
+    {
+      "id": "s1",
+      "label": "Open",
+      "cue": "Start by setting the scene — where and when does your story take place?",
+      "words": [
+        { "id": "w0001", "korean": "사람", "english": "person" }
+      ],
+      "grammar": null
+    },
+    {
+      "id": "s2",
+      "label": "The story",
+      "cue": "Describe what actually happened — what's the specific moment you remember?",
+      "words": [
+        { "id": "w0042", "korean": "친해지다", "english": "to become close" },
+        { "id": "w0089", "korean": "어색하다", "english": "to feel awkward" }
+      ],
+      "grammar": {
+        "id": "g1",
+        "pattern": "-(으)니까",
+        "meaning": "because / since",
+        "example": "처음 만났을 때 어색했으니까 말을 많이 못 했어요."
+      }
+    }
+  ]
+}`;
+
+    const parsed = await generateJson(prompt);
+
+    return res.json(parsed);
+  } catch (error) {
+    console.error("Timeline error:", error);
+    return res.status(500).json({ error: "Failed to generate timeline." });
+  }
+});
+
+// ─── /api/feedback ─────────────────────────────────────────────────────────
+// Updated: grammar now comes from timeline (no grammar DB), structure adjusted
 app.post("/api/feedback", async (req, res) => {
   try {
     const {
@@ -237,131 +323,63 @@ app.post("/api/feedback", async (req, res) => {
       selectedWords,
       usedWords,
       missedWords,
-      selectedGrammar,
-      usedGrammar,
-      missedGrammar,
+      grammarPatterns,
+      usedGrammarIds,
+      missedGrammarIds,
     } = req.body;
 
-    const prompt = `
-    You are a friendly Korean speaking coach for "말해봐", a Korean speaking practice app.
-    
-    Your role:
-    Help beginner-to-intermediate Korean learners actively use Korean words they already know passively.
-    
-    The user just finished one speaking practice session.
-    They selected vocabulary and grammar targets, recorded themselves, listened back, and self-marked which targets they used.
-    
-    Important limitation:
-    You do not have the audio.
-    You do not have a transcript.
-    Only use the self-marking data.
-    Never pretend you heard the recording.
-    
-    Core learning philosophy:
-    The goal is not perfect Korean.
-    The goal is active retrieval.
-    If the user missed a word, that does not mean they failed.
-    It means the word is a good target for the next speaking attempt.
-    
-    Tone:
-    - warm
-    - encouraging
-    - clear
-    - practical
-    - not too academic
-    - not too long
-    - explain in English
-    - Korean examples should be natural and short
-    
-    Topic:
-    ${JSON.stringify(topic, null, 2)}
-    
-    Rough speaking idea:
-    ${roughIdea}
-    
-    Selected vocabulary:
-    ${JSON.stringify(selectedWords, null, 2)}
-    
-    Vocabulary marked as used:
-    ${JSON.stringify(usedWords, null, 2)}
-    
-    Vocabulary marked as missed:
-    ${JSON.stringify(missedWords, null, 2)}
-    
-    Selected grammar:
-    ${JSON.stringify(selectedGrammar, null, 2)}
-    
-    Grammar marked as used:
-    ${JSON.stringify(usedGrammar, null, 2)}
-    
-    Grammar marked as missed:
-    ${JSON.stringify(missedGrammar, null, 2)}
-    
-    Feedback rules:
-    1. Write feedback in English.
-    2. Korean example sentences should be in Korean.
-    3. Do not mention pronunciation.
-    4. Do not give a numerical score.
-    5. Do not claim the user used something incorrectly.
-    6. Do not say you listened to the audio.
-    7. Do not scold the user.
-    8. Keep explanations short and useful.
-    9. Return valid JSON only.
-    10. Do not include markdown.
-    11. Do not include code fences.
-    12. Do not add extra keys outside the required JSON format.
-    
-    For each missed word:
-    - Explain why it may be hard to retrieve while speaking.
-    - Give one short natural Korean sentence using the word.
-    - The sentence should fit the user's topic and rough idea.
-    
-    For each missed grammar pattern:
-    - Give one short explanation.
-    - Give one short Korean example sentence using that grammar.
-    - The sentence should fit the user's topic and rough idea.
-    
-    Return this exact JSON shape:
-    {
-      "encouragement": "1-2 short encouraging sentences",
-      "usedSummary": "Short summary of what went well",
-      "missedWords": [
-        {
-          "id": "word id",
-          "korean": "Korean word",
-          "english": "English meaning",
-          "reason": "Short explanation of why this word may be hard to use while speaking",
-          "example": "Natural Korean sentence using this word"
-        }
-      ],
-      "missedGrammar": [
-        {
-          "id": "grammar id",
-          "korean": "grammar pattern",
-          "english": "meaning",
-          "reason": "Short explanation of how this grammar can fit the user's topic",
-          "example": "Natural Korean sentence using this grammar"
-        }
-      ],
-      "nextSentence": "One natural Korean sentence the user can try next time"
-    }
-    `;
+    const usedGrammar = (grammarPatterns || []).filter((g) =>
+      (usedGrammarIds || []).includes(g.id)
+    );
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
+    const missedGrammar = (grammarPatterns || []).filter((g) =>
+      (missedGrammarIds || []).includes(g.id)
+    );
 
-    const feedback = extractJson(response.text);
+    const prompt = `You are a friendly Korean speaking coach for "말해봐".
 
-    return res.json({
-      feedback,
-    });
+The user just finished a speaking practice session. They self-marked which target words and grammar patterns they actually used.
+
+You do NOT have the audio or transcript. Only use the self-marking data.
+
+Core philosophy: The goal is active retrieval, not perfect Korean. Missed words are the next session's targets — not failures.
+
+Tone: warm, encouraging, practical, concise. Feedback in English. Korean examples in Korean.
+
+Topic: ${JSON.stringify(topic)}
+Rough idea: ${roughIdea}
+
+Words used: ${JSON.stringify(usedWords)}
+Words missed: ${JSON.stringify(missedWords)}
+Grammar used: ${JSON.stringify(usedGrammar)}
+Grammar missed: ${JSON.stringify(missedGrammar)}
+
+Rules:
+1. Write in English only (Korean in examples only).
+2. No pronunciation feedback. No numerical scores. No scolding.
+3. For each missed word: explain briefly why it's hard to retrieve mid-speech, then give one short natural Korean sentence using it, fitted to their topic.
+4. For each missed grammar: explain how it could have helped in their talk, then give one short Korean example.
+5. Return valid JSON only — no markdown, no code fences.
+
+Return format:
+{
+  "encouragement": "1-2 warm sentences",
+  "usedSummary": "Short sentence on what went well",
+  "missedWords": [
+    { "id": "w0001", "korean": "...", "english": "...", "reason": "...", "example": "..." }
+  ],
+  "missedGrammar": [
+    { "id": "g1", "pattern": "...", "meaning": "...", "reason": "...", "example": "..." }
+  ],
+  "nextSentence": "One natural Korean sentence the user can try next time"
+}`;
+
+    const feedback = await generateJson(prompt);
+
+    return res.json({ feedback });
   } catch (error) {
     console.error("Feedback error:", error);
-    return res.status(500).json({
-      error: "Failed to generate feedback.",
-    });
+    return res.status(500).json({ error: "Failed to generate feedback." });
   }
 });
 

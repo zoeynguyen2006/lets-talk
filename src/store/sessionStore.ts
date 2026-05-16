@@ -1,89 +1,117 @@
 import { create } from 'zustand';
-import type { Topic, Word, Grammar, WordMix, FeedbackReport } from '../types';
+import type { Topic, Word, Grammar, TimelineSection, GrammarPattern } from '../types';
 
-interface State {
-  // Screen 1 inputs
-  selectedTopic:        Topic | null;
-  roughIdea:            string;
-  difficultySlider:     number;   // 1–5
-  wordMix:              WordMix;
+interface SessionState {
+  // Setup
+  selectedTopic:    Topic | null;
+  roughIdea:        string;
+  difficultySlider: number;
 
-  // Screen 2 data
-  recommendedWords:     Word[];
-  selectedWords:        Word[];
-  selectedGrammar:      Grammar[];
+  // Words
+  recommendedWords: Word[];
+  selectedWords:    Word[];
 
-  // Screen 3–4
-  recordingBlob:        Blob | null;
-  usedWordIds:          string[];
-  usedGrammarIds:       string[];
+  // Cue questions
+  cueQuestions: string[];
+  cueAnswers:   string[];
 
-  // Screen 5
-  feedback:             FeedbackReport | null;
+  // Timeline + grammar (from /api/timeline)
+  speechTimeline:  TimelineSection[];
+  grammarPatterns: GrammarPattern[];
 
-  // Actions
-  setTopic:             (t: Topic) => void;
-  setRoughIdea:         (s: string) => void;
-  setDifficulty:        (n: number) => void;
-  setWordMix:           (m: WordMix) => void;
-  setRecommendedWords:  (w: Word[]) => void;
-  toggleWord:           (w: Word) => void;
-  toggleGrammar:        (g: Grammar) => void;
-  setRecording:         (b: Blob | null) => void;
-  toggleUsedWord:       (id: string) => void;
-  toggleUsedGrammar:    (id: string) => void;
-  setFeedback:          (f: FeedbackReport) => void;
-  reset:                () => void;
+  // Recording
+  recordingBlob: Blob | null;
+
+  // Self-evaluation
+  usedWordIds:    string[];
+  usedGrammarIds: string[];  // grammar ids from grammarPatterns
+
+  // Timeline notes (sectionId → note text)
+  sectionNotes: Record<string, string>;
+
+  // Feedback
+  feedback: FeedbackData | null;
+
+  // ── Actions ──
+  setTopic:            (t: Topic) => void;
+  setRoughIdea:        (s: string) => void;
+  setDifficulty:       (n: number) => void;
+  setRecommendedWords: (words: Word[]) => void;
+  toggleWord:          (word: Word) => void;
+  setCueQuestions:     (qs: string[]) => void;
+  setCueAnswers:       (as: string[]) => void;
+  setTimeline:         (sections: TimelineSection[], grammar: GrammarPattern[]) => void;
+  setRecording:        (blob: Blob) => void;
+  toggleUsedWord:      (id: string) => void;
+  toggleUsedGrammar:   (id: string) => void;
+  setSectionNote:      (sectionId: string, note: string) => void;
+  setFeedback:         (f: FeedbackData) => void;
+  reset:               () => void;
 }
 
-const SLIDER_MIXES: Record<number, WordMix> = {
-  1: { lower_beginner: 16, upper_beginner: 10, intermediate: 4  },
-  2: { lower_beginner: 10, upper_beginner: 12, intermediate: 8  },
-  3: { lower_beginner: 6,  upper_beginner: 10, intermediate: 14 },
-  4: { lower_beginner: 3,  upper_beginner: 8,  intermediate: 19 },
-  5: { lower_beginner: 0,  upper_beginner: 6,  intermediate: 24 },
+export interface FeedbackData {
+  encouragement: string;
+  usedSummary:   string;
+  missedWords: {
+    id: string; korean: string; english: string; reason: string; example: string;
+  }[];
+  missedGrammar: {
+    id: string; pattern: string; meaning: string; reason: string; example: string;
+  }[];
+  nextSentence: string;
+}
+
+const defaults = {
+  selectedTopic:    null,
+  roughIdea:        '',
+  difficultySlider: 3,
+  recommendedWords: [],
+  selectedWords:    [],
+  cueQuestions:     [],
+  cueAnswers:       [],
+  speechTimeline:   [],
+  grammarPatterns:  [],
+  recordingBlob:    null,
+  usedWordIds:      [],
+  usedGrammarIds:   [],
+  sectionNotes:     {},
+  feedback:         null,
 };
 
-const init = {
-  selectedTopic: null, roughIdea: '', difficultySlider: 3,
-  wordMix: SLIDER_MIXES[3], recommendedWords: [], selectedWords: [],
-  selectedGrammar: [], recordingBlob: null, usedWordIds: [],
-  usedGrammarIds: [], feedback: null,
-};
+export const useStore = create<SessionState>((set) => ({
+  ...defaults,
 
-export const SLIDER_MIXES_MAP = SLIDER_MIXES;
-
-export const useStore = create<State>((set) => ({
-  ...init,
-
-  setTopic:    (selectedTopic) => set({ selectedTopic }),
-  setRoughIdea:(roughIdea) => set({ roughIdea }),
-  setDifficulty:(n) => set({ difficultySlider: n, wordMix: SLIDER_MIXES[n] }),
-  setWordMix:  (wordMix) => set({ wordMix }),
-  setRecommendedWords: (recommendedWords) => set({ recommendedWords }),
-
-  toggleWord: (w) => set((s) => {
-    const has = s.selectedWords.some(x => x.id === w.id);
-    return { selectedWords: has ? s.selectedWords.filter(x => x.id !== w.id) : [...s.selectedWords, w] };
+  setTopic:            (t) => set({ selectedTopic: t }),
+  setRoughIdea:        (s) => set({ roughIdea: s }),
+  setDifficulty:       (n) => set({ difficultySlider: n }),
+  setRecommendedWords: (words) => set({ recommendedWords: words, selectedWords: [] }),
+  toggleWord: (word) => set((s) => {
+    const exists = s.selectedWords.some(w => w.id === word.id);
+    if (exists) return { selectedWords: s.selectedWords.filter(w => w.id !== word.id) };
+    if (s.selectedWords.length >= 10) return {};
+    return { selectedWords: [...s.selectedWords, word] };
   }),
-
-  toggleGrammar: (g) => set((s) => {
-    const has = s.selectedGrammar.some(x => x.id === g.id);
-    return { selectedGrammar: has ? s.selectedGrammar.filter(x => x.id !== g.id) : [...s.selectedGrammar, g] };
+  setCueQuestions: (qs) => set({ cueQuestions: qs, cueAnswers: Array(qs.length).fill('') }),
+  setCueAnswers:   (as) => set({ cueAnswers: as }),
+  setTimeline: (sections, grammar) => set({
+    speechTimeline: sections,
+    grammarPatterns: grammar,
+    usedGrammarIds: [],
   }),
-
-  setRecording: (recordingBlob) => set({ recordingBlob }),
-
-  toggleUsedWord: (id) => set((s) => {
-    const has = s.usedWordIds.includes(id);
-    return { usedWordIds: has ? s.usedWordIds.filter(x => x !== id) : [...s.usedWordIds, id] };
-  }),
-
-  toggleUsedGrammar: (id) => set((s) => {
-    const has = s.usedGrammarIds.includes(id);
-    return { usedGrammarIds: has ? s.usedGrammarIds.filter(x => x !== id) : [...s.usedGrammarIds, id] };
-  }),
-
-  setFeedback: (feedback) => set({ feedback }),
-  reset: () => set(init),
+  setRecording:      (blob) => set({ recordingBlob: blob }),
+  toggleUsedWord:    (id) => set((s) => ({
+    usedWordIds: s.usedWordIds.includes(id)
+      ? s.usedWordIds.filter(x => x !== id)
+      : [...s.usedWordIds, id],
+  })),
+  toggleUsedGrammar: (id) => set((s) => ({
+    usedGrammarIds: s.usedGrammarIds.includes(id)
+      ? s.usedGrammarIds.filter(x => x !== id)
+      : [...s.usedGrammarIds, id],
+  })),
+  setSectionNote: (sectionId, note) => set((s) => ({
+    sectionNotes: { ...s.sectionNotes, [sectionId]: note },
+  })),
+  setFeedback: (f) => set({ feedback: f }),
+  reset: () => set(defaults),
 }));

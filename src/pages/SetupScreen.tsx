@@ -26,8 +26,11 @@ const SLIDER_LABELS: Record<number, string> = {
 
 export default function SetupScreen() {
   const navigate = useNavigate();
-  const { selectedTopic, roughIdea, difficultySlider, wordMix,
-          setTopic, setRoughIdea, setDifficulty, setRecommendedWords, reset } = useStore();
+  const {
+    selectedTopic, roughIdea, difficultySlider,
+    setTopic, setRoughIdea, setDifficulty,
+    setCueQuestions, reset,
+  } = useStore();
   const [loading, setLoading] = useState(false);
 
   const canGenerate = !!selectedTopic && roughIdea.trim().length > 8;
@@ -39,38 +42,26 @@ export default function SetupScreen() {
 
   async function handleGenerate() {
     if (!canGenerate || !selectedTopic) return;
-  
     setLoading(true);
-  
+
     try {
-      const response = await fetch('http://localhost:3001/api/recommend', {
+      const res = await fetch('http://localhost:3001/api/cues', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          topic: selectedTopic,
-          roughIdea,
-          difficultySliderValue: difficultySlider,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: selectedTopic, roughIdea }),
       });
-  
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        throw new Error(errorData?.error || 'Failed to generate practice set.');
-      }
-  
-      const data = await response.json();
-  
-      setRecommendedWords(data.words);
-      navigate('/select');
+      if (!res.ok) throw new Error('Failed to generate planning questions.');
+      const data = await res.json();
+      setCueQuestions(data.questions);
+      navigate('/cues');
     } catch (error) {
-      console.error('Generate practice set error:', error);
-      alert('Could not generate words right now. Please try again.');
+      console.error('Generate error:', error);
+      alert('Could not generate your practice set. Please try again.');
     } finally {
       setLoading(false);
     }
   }
+
   return (
     <div className="min-h-screen bg-sand px-5 py-10 max-w-xl mx-auto">
 
@@ -84,7 +75,7 @@ export default function SetupScreen() {
       </header>
 
       {/* ── Step 1: Topic ── */}
-      <section className="mb-8 animate-slide-up" style={{animationDelay:'60ms',animationFillMode:'both'}}>
+      <section className="mb-8 animate-slide-up" style={{ animationDelay: '60ms', animationFillMode: 'both' }}>
         <p className="text-xs font-mono uppercase tracking-widest text-ink-muted mb-3">
           01 — Choose a topic
         </p>
@@ -114,11 +105,13 @@ export default function SetupScreen() {
       </section>
 
       {/* ── Step 2: Rough idea ── */}
-      <section className="mb-8 animate-slide-up" style={{animationDelay:'120ms',animationFillMode:'both'}}>
+      <section className="mb-8 animate-slide-up" style={{ animationDelay: '120ms', animationFillMode: 'both' }}>
         <p className="text-xs font-mono uppercase tracking-widest text-ink-muted mb-1">
           02 — What do you want to say?
         </p>
-        <p className="text-xs text-ink-muted mb-3">Write a rough idea — not a script. English, Korean, or mixed is fine.</p>
+        <p className="text-xs text-ink-muted mb-3">
+          Write a rough idea — not a script. English, Korean, or mixed is fine.
+        </p>
         <textarea
           value={roughIdea}
           onChange={e => setRoughIdea(e.target.value)}
@@ -134,7 +127,7 @@ export default function SetupScreen() {
       </section>
 
       {/* ── Step 3: Difficulty ── */}
-      <section className="mb-10 animate-slide-up" style={{animationDelay:'180ms',animationFillMode:'both'}}>
+      <section className="mb-10 animate-slide-up" style={{ animationDelay: '180ms', animationFillMode: 'both' }}>
         <p className="text-xs font-mono uppercase tracking-widest text-ink-muted mb-1">
           03 — Vocabulary difficulty
         </p>
@@ -150,10 +143,13 @@ export default function SetupScreen() {
       </section>
 
       {/* ── Generate button ── */}
-      <button onClick={handleGenerate} disabled={!canGenerate || loading}
+      <button
+        onClick={handleGenerate}
+        disabled={!canGenerate || loading}
         className="btn-primary w-full text-base py-4 animate-slide-up"
-        style={{animationDelay:'240ms',animationFillMode:'both'}}>
-        {loading ? 'Finding your words…' : 'Generate Practice Set →'}
+        style={{ animationDelay: '240ms', animationFillMode: 'both' }}
+      >
+        {loading ? 'Loading…' : 'Let\'s go →'}
       </button>
     </div>
   );
